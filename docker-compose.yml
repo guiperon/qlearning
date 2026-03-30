@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  peron_test:
+    image: peron_test:latest
+    container_name: peron_test
+    volumes:
+      - ./qlearning:/qlearning
+    entrypoint: ["/bin/bash"]
+    stdin_open: true
+    tty: true

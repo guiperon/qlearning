@@ -1,0 +1,10 @@
+# Ignorar o ambiente virtual local do Python
+.venv/
+
+# Bônus: outras coisas que o Docker deve ignorar
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.git/
+.vscode/
