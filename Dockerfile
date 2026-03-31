@@ -1,6 +1,6 @@
     FROM python:3.12-slim-bookworm
 
-    WORKDIR /app
+    WORKDIR /qlearning/app
 
     COPY requirements.txt .
 
@@ -21,6 +21,6 @@
 
    # COPY . .
 
-    COPY app /app
+    COPY app /qlearning/app
 
     CMD ["python", "/app/ThroughputPower.py"]

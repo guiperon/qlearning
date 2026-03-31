@@ -15,7 +15,8 @@
 		}
 	},
 
-	"runArgs": [
-    ]
+	"runArgs": [],
+	"postStartCommand": "if [ -f /workspaces/testepy/configure_git_user.sh ]; then cd /workspaces/testepy && bash ./configure_git_user.sh; else echo 'configure_git_user.sh not found, skipping.'; fi",
+	"postAttachCommand": "if [ -f /workspaces/testepy/configure_git_user.sh ]; then cd /workspaces/testepy && bash ./configure_git_user.sh; else echo 'configure_git_user.sh not found, skipping.'; fi"
 
 }
