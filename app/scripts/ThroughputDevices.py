@@ -154,7 +154,7 @@ def run_simulation():
     plt.tight_layout()
 
     # Save the plot to a file instead of trying to open a GUI window
-    output_path = '/workspaces/testepy/qlearning0/Throughput_Devices_fig1.png'
+    output_path = '../results/Throughput_Devices_fig1.png'
     plt.savefig(output_path, bbox_inches='tight', dpi=150)
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Saved plot to: {output_path}")
 
@@ -174,7 +174,7 @@ def run_simulation():
     plt.tight_layout()
 
     # Save the plot to a file instead of trying to open a GUI window
-    output_path = '/workspaces/testepy/qlearning0/Throughput_Devices_fig2.png'
+    output_path = '../results/Throughput_Devices_fig2.png'
     plt.savefig(output_path, bbox_inches='tight', dpi=150)
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Saved plot to: {output_path}")
 

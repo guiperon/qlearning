@@ -143,7 +143,7 @@ def run_simulation():
     ax1.set_xlabel('Power (dBm)', fontsize=14)
     ax1.set_ylabel('Rate of redundant messages', fontsize=14)
 
-    output_path1 = '/workspaces/testepy/qlearning0/Throughput_Power_fig1.png'
+    output_path1 = '../results/Throughput_Power_fig1.png'
     fig1.savefig(output_path1, bbox_inches='tight', dpi=150)
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Saved plot to: {output_path1}")
 
@@ -165,7 +165,7 @@ def run_simulation():
     ax2.set_xlabel('Transmit Power (P) [dBm]', fontsize=14)
     ax2.set_ylabel(r'Normalized Throughput ($\tau$) [bps/Hz]', fontsize=14)
 
-    output_path2 = '/workspaces/testepy/qlearning0/Throughput_Power_fig2.png'
+    output_path2 = '../results/Throughput_Power_fig2.png'
     fig2.savefig(output_path2, bbox_inches='tight', dpi=150)
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Saved plot to: {output_path2}")
 
