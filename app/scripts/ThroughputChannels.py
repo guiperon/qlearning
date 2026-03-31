@@ -41,7 +41,7 @@ def run_simulation():
     altitude = 780e3
 
     # Simulation Parameters
-    runs = 100    # Reduzi para teste rápido, original: 100
+    runs = 100    # original: 100
     slots = 100   # original: 100
     frames = 50   # original: 50
 

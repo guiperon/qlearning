@@ -28,6 +28,6 @@ env/
 .DS_Store
 Thumbs.db
 
-# Local
+# Local configuration files
 configure_git_user.sh
 
