@@ -1,10 +1,8 @@
 {
 	"name": "Python 3",
-	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
-	//"image": "mcr.microsoft.com/devcontainers/python:1-3.12-bullseye"
-	"build": {
-		"dockerfile": "../Dockerfile"
-	},
+	"dockerComposeFile": "../docker-compose.yml",
+	"service": "qlearning_container",
+	"workspaceFolder": "/workspaces/testepy",
 	"customizations": {
 		"vscode": {
 			"extensions": [
@@ -13,10 +11,9 @@
 				"ms-azuretools.vscode-docker"
 			]
 		}
-	},
+	}//,
 
-	"runArgs": [],
-	"postStartCommand": "if [ -f /workspaces/testepy/configure_git_user.sh ]; then cd /workspaces/testepy && bash ./configure_git_user.sh; else echo 'configure_git_user.sh not found, skipping.'; fi",
+	/*"postStartCommand": "if [ -f /workspaces/testepy/configure_git_user.sh ]; then cd /workspaces/testepy && bash ./configure_git_user.sh; else echo 'configure_git_user.sh not found, skipping.'; fi",
 	"postAttachCommand": "if [ -f /workspaces/testepy/configure_git_user.sh ]; then cd /workspaces/testepy && bash ./configure_git_user.sh; else echo 'configure_git_user.sh not found, skipping.'; fi"
-
+    */
 }

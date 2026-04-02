@@ -1,11 +1,26 @@
 version: '3.8'
 
+#Seção principal onde os contêineres são definidos
 services:
-  peron_test:
-    image: peron_test:latest
-    container_name: peron_test
-    volumes:
-      - ./qlearning:/qlearning
+  #Nome do serviço -> mesmo nome usado pelo VSCode no devcontainer.json
+  qlearning_container:
+    #Não apenas baixar a imagem, mas construir a partir do Dockerfile localizado no diretório atual
+    build:
+      #Define o diretório base para a construção da imagem.
+      context: .        
+      #Nome exato do arquivo com as instruções de construção      
+      dockerfile: Dockerfile
+    #Nome da imagem etiquetada para facilitar a referência e reutilização 
+    image: imagem_qlearning_container:latest
+    #Nome do contêiner (docker ps)
+    container_name: qlearning_container
+    #Substitui o comando padrão que a imagem executaria ao ligar. Apenas abrir o terminal
     entrypoint: ["/bin/bash"]
+    #Permite que o terminal permaneça aberto para interação. (-i)
     stdin_open: true
+    #Aloca um pseudo-terminal (-t).
     tty: true
+    #Criação das pontes entre o sistema de arquivos do host para o contêiner
+    volumes:
+    #<pasta do host>:<pasta do contêiner>:<opções de montagem>
+      - .:/workspaces/testepy:cached #cached: melhora o desempenho de leitura
