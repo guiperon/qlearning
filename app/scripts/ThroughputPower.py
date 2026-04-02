@@ -3,10 +3,51 @@ matplotlib.use('Agg')
 import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime
+import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from StochasticGeometry import StochasticGeometry
 from SlottedAloha import SlottedAloha_MultipleChannels
 from QLearning import InitializeQTable, Qlearning_MultipleChannels, Qlearning_UniqueChannel
+
+
+# ==============================================================================
+# WORKER — runs a single power-level iteration in its own process
+# ==============================================================================
+def _run_power_level(args):
+    (d, P_val, P_dBm_val, Devices, Relays, Channels_Relays,
+     runs, slots, frames, alpha, gamma, r, N, Distance, h_Nakagami) = args
+
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+          f"[PID {os.getpid()}] Power: {P_dBm_val} dBm")
+
+    alpha_k_j = 10 ** (-(128.1 + 36.7 * np.log10(Distance)) / 10)
+    SNR = P_val / N * alpha_k_j * h_Nakagami ** 2
+
+    sa_mc = {}
+    ql_mc = {}
+    ql_uc = {}
+
+    for i, ch in enumerate(Channels_Relays):
+        # SA-NOMA
+        tp, dist, total = SlottedAloha_MultipleChannels(
+            Devices, Relays, ch, runs, frames, slots, SNR, N, r)
+        sa_mc[i] = (tp, dist, total)
+
+        # QL-NOMA
+        QTable = InitializeQTable(Devices, ch, slots, runs, True)
+        tp, dist, total = Qlearning_MultipleChannels(
+            Devices, Relays, ch, runs, frames, slots, SNR, N, r, QTable, alpha, gamma)
+        ql_mc[i] = (tp, dist, total)
+
+        # QL UniqueChannel
+        QTable = InitializeQTable(Devices, ch, slots, runs, True)
+        tp, dist, total = Qlearning_UniqueChannel(
+            Devices, Relays, ch, runs, frames, slots, SNR, N, r, QTable, alpha, gamma)
+        ql_uc[i] = (tp, dist, total)
+
+    return d, sa_mc, ql_mc, ql_uc
+
 
 # ==============================================================================
 # MAIN SCRIPT
@@ -82,36 +123,25 @@ def run_simulation():
 
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Iniciando simulação...")
 
-    for d in range(n_p):
-        P = P_range[d]
-        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Power: {P_dBm[d]}/{P_dBm[-1]} dBm")
+    # Build one argument bundle per power level
+    task_args = [
+        (d, P_range[d], P_dBm[d], Devices, Relays, Channels_Relays,
+         runs, slots, frames, alpha, gamma, r, N, Distance, h_Nakagami)
+        for d in range(n_p)
+    ]
 
-        alpha_k_j = 10 ** (-(128.1 + 36.7 * np.log10(Distance)) / 10)
-        SNR = P / N * alpha_k_j * h_Nakagami ** 2
+    n_workers = min(os.cpu_count() or 1, n_p)
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+          f"Using {n_workers} parallel workers for {n_p} power levels.")
 
-        for i, ch in enumerate(Channels_Relays):
-            # SA-NOMA
-            tp, dist, total = SlottedAloha_MultipleChannels(
-                Devices, Relays, ch, runs, frames, slots, SNR, N, r)
-            NormThroughput_SA_MC[i][d] = tp
-            ndist_SA_MC[i][d] = dist
-            ntotal_SA_MC[i][d] = total
-
-            # QL-NOMA
-            QTable = InitializeQTable(Devices, ch, slots, runs, True)
-            tp, dist, total = Qlearning_MultipleChannels(
-                Devices, Relays, ch, runs, frames, slots, SNR, N, r, QTable, alpha, gamma)
-            NormThroughput_QL_MC[i][d] = tp
-            ndist_QL_MC[i][d] = dist
-            ntotal_QL_MC[i][d] = total
-
-            # QL UniqueChannel
-            QTable = InitializeQTable(Devices, ch, slots, runs, True)
-            tp, dist, total = Qlearning_UniqueChannel(
-                Devices, Relays, ch, runs, frames, slots, SNR, N, r, QTable, alpha, gamma)
-            NormThroughput_QL_UC[i][d] = tp
-            ndist_QL_UC[i][d] = dist
-            ntotal_QL_UC[i][d] = total
+    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        futures = {executor.submit(_run_power_level, args): args[0] for args in task_args}
+        for future in as_completed(futures):
+            d, sa_mc, ql_mc, ql_uc = future.result()
+            for i in range(len(Channels_Relays)):
+                NormThroughput_SA_MC[i][d], ndist_SA_MC[i][d], ntotal_SA_MC[i][d] = sa_mc[i]
+                NormThroughput_QL_MC[i][d], ndist_QL_MC[i][d], ntotal_QL_MC[i][d] = ql_mc[i]
+                NormThroughput_QL_UC[i][d], ndist_QL_UC[i][d], ntotal_QL_UC[i][d] = ql_uc[i]
 
     # Redundant rates
     redundant_SA_MC = {}
