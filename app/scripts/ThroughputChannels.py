@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime
+import os
 
 from StochasticGeometry import StochasticGeometry
 from SlottedAloha import SlottedAloha_MultipleChannels, SlottedAloha_MultipleChannels_NoNOMA
@@ -147,7 +148,8 @@ def run_simulation():
     plt.tight_layout()
 
     # Save the plot to a file instead of trying to open a GUI window
-    output_path = '../results/Throughput_Channels_fig1.png'
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    output_path = os.path.join(script_dir, '..', 'results', 'Throughput_Channels_fig1.png')
     plt.savefig(output_path, bbox_inches='tight', dpi=150)
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Saved plot to: {output_path}")
 
