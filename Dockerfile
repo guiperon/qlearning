@@ -21,6 +21,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # COPY . .
 
-COPY app /qlearning/app
+# COPY app /qlearning/app
 
 CMD ["python", "/app/ThroughputPower.py"]
