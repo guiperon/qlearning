@@ -2,10 +2,33 @@ import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime
 import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from StochasticGeometry import StochasticGeometry
 from SlottedAloha import SlottedAloha_MultipleChannels, SlottedAloha_MultipleChannels_NoNOMA
 from QLearning import InitializeQTable, Qlearning_MultipleChannels, Qlearning_MultipleChannels_NoNOMA
+
+
+def _run_channel_iteration(args):
+    (idx, num_channels, Devices, Relays, runs, frames, slots,
+     N, r, alpha, gamma, P, Distance, h_Nakagami) = args
+
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+          f"[PID {os.getpid()}] Channels: {num_channels}")
+
+    alpha_k_j = 10**(-(128.1 + 36.7 * np.log10(Distance)) / 10)
+    SNR = (P / N * alpha_k_j * h_Nakagami**2)
+
+    tp_sa, ndist_sa, ntotal_sa = SlottedAloha_MultipleChannels(
+        Devices, Relays, num_channels, runs, frames, slots, SNR, N, r
+    )
+
+    QTable = InitializeQTable(Devices, num_channels, slots, runs, True)
+    tp_ql, ndist_ql, ntotal_ql = Qlearning_MultipleChannels(
+        Devices, Relays, num_channels, runs, frames, slots, SNR, N, r, QTable, alpha, gamma
+    )
+
+    return idx, tp_sa, ndist_sa, ntotal_sa, tp_ql, ndist_ql, ntotal_ql
 
 # ==============================================================================
 # MAIN SCRIPT
@@ -66,44 +89,39 @@ def run_simulation():
     h_imag = np.sqrt(np.random.gamma(shape_k, scale_theta, size_h))
     h_Nakagami = np.abs((h_real + 1j * h_imag) / np.sqrt(m))
     
-    # Listas para armazenar resultados
-    results_sa = {'ntput': [], 'ndist': [], 'ntotal': []}
-    results_ql = {'ntput': [], 'ndist': [], 'ntotal': []}
+    n_cases = len(Channels_Relays)
+
+    # Resultados indexados por quantidade de canais
+    results_sa = {'ntput': np.zeros(n_cases), 'ndist': np.zeros(n_cases), 'ntotal': np.zeros(n_cases)}
+    results_ql = {'ntput': np.zeros(n_cases), 'ndist': np.zeros(n_cases), 'ntotal': np.zeros(n_cases)}
 
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Iniciando loop de simulação...")
 
-    # Loop variando o número de canais disponíveis
-    for d_idx, num_channels in enumerate(Channels_Relays):
-        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Channels: {num_channels}/{np.max(Channels_Relays)}")
-        
-        # Path Loss e SNR
-        # Nota: np.log10
-        alpha_k_j = 10**(-(128.1 + 36.7 * np.log10(Distance)) / 10)
-        SNR = (P / N * alpha_k_j * h_Nakagami**2)
+    task_args = [
+        (idx, int(num_channels), Devices, Relays, runs, frames, slots,
+         N, r, alpha, gamma, P, Distance, h_Nakagami)
+        for idx, num_channels in enumerate(Channels_Relays)
+    ]
 
-        # --- SA-NOMA ---
-        tp_sa, ndist_sa, ntotal_sa = SlottedAloha_MultipleChannels(
-            Devices, Relays, num_channels, runs, frames, slots, SNR, N, r
-        )
-        results_sa['ntput'].append(tp_sa)
-        results_sa['ndist'].append(ndist_sa)
-        results_sa['ntotal'].append(ntotal_sa)
+    n_workers = min(os.cpu_count() or 1, n_cases)
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+          f"Using {n_workers} parallel workers for {n_cases} channel cases.")
 
-        # --- Q-Learning ---
-        # Inicializa a tabela com o número atual de canais
-        QTable = InitializeQTable(Devices, num_channels, slots, runs, True)
-        
-        tp_ql, ndist_ql, ntotal_ql = Qlearning_MultipleChannels(
-            Devices, Relays, num_channels, runs, frames, slots, SNR, N, r, QTable, alpha, gamma
-        )
-        results_ql['ntput'].append(tp_ql)
-        results_ql['ndist'].append(ndist_ql)
-        results_ql['ntotal'].append(ntotal_ql)
+    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        futures = {executor.submit(_run_channel_iteration, args): args[0] for args in task_args}
+        for future in as_completed(futures):
+            idx, tp_sa, ndist_sa, ntotal_sa, tp_ql, ndist_ql, ntotal_ql = future.result()
+            results_sa['ntput'][idx] = tp_sa
+            results_sa['ndist'][idx] = ndist_sa
+            results_sa['ntotal'][idx] = ntotal_sa
+            results_ql['ntput'][idx] = tp_ql
+            results_ql['ndist'][idx] = ndist_ql
+            results_ql['ntotal'][idx] = ntotal_ql
 
     # Conversão para arrays numpy para facilitar cálculos
     ndist_sa_arr = np.array(results_sa['ndist'])
     ntotal_sa_arr = np.array(results_sa['ntotal'])
-    
+
     ndist_ql_arr = np.array(results_ql['ndist'])
     ntotal_ql_arr = np.array(results_ql['ntotal'])
 

@@ -2,10 +2,54 @@ import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime
 import os
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from StochasticGeometry import StochasticGeometry
 from SlottedAloha import SlottedAloha_MultipleChannels, SlottedAloha_MultipleChannels_NoNOMA
 from QLearning import InitializeQTable, Qlearning_MultipleChannels, Qlearning_MultipleChannels_NoNOMA
+
+
+def _run_devices_iteration(args):
+    (idx, num_dev, Channels_Relays_List, Relays, runs, frames, slots,
+     N, r, alpha, gamma, P, Distance, h_Nakagami) = args
+
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+          f"[PID {os.getpid()}] Devices: {num_dev}")
+
+    dist_slice = Distance[:num_dev, :, :]
+    h_slice = h_Nakagami[:num_dev, :, :]
+
+    alpha_k_j = 10**(-(128.1 + 36.7 * np.log10(dist_slice)) / 10)
+    SNR = (P / N * alpha_k_j * h_slice**2)
+
+    per_channel_results = {}
+    for ch_count in Channels_Relays_List:
+        tp, dist, total = SlottedAloha_MultipleChannels(
+            num_dev, Relays, ch_count, runs, frames, slots, SNR, N, r
+        )
+
+        tp_nonoma, dist_nonoma, total_nonoma = SlottedAloha_MultipleChannels_NoNOMA(
+            num_dev, Relays, ch_count, runs, frames, slots, SNR, N, r
+        )
+
+        QTable = InitializeQTable(num_dev, ch_count, slots, runs, True)
+        tp_ql, dist_ql, total_ql = Qlearning_MultipleChannels(
+            num_dev, Relays, ch_count, runs, frames, slots, SNR, N, r, QTable, alpha, gamma
+        )
+
+        QTable = InitializeQTable(num_dev, ch_count, slots, runs, True)
+        tp_ql_nonoma, dist_ql_nonoma, total_ql_nonoma = Qlearning_MultipleChannels_NoNOMA(
+            num_dev, Relays, ch_count, runs, frames, slots, SNR, N, r, QTable, alpha, gamma
+        )
+
+        per_channel_results[ch_count] = {
+            'SA': (tp, dist, total),
+            'SA_NoNOMA': (tp_nonoma, dist_nonoma, total_nonoma),
+            'QL': (tp_ql, dist_ql, total_ql),
+            'QL_NoNOMA': (tp_ql_nonoma, dist_ql_nonoma, total_ql_nonoma),
+        }
+
+    return idx, per_channel_results
 
 # ==============================================================================
 # 2. SCRIPT PRINCIPAL (Main)
@@ -68,51 +112,52 @@ def run_simulation():
     h_Nakagami = np.abs((h_real + 1j * h_imag) / np.sqrt(m))
 
     # Estruturas para armazenar resultados
-    # Dicionário: results[Metodo][NumCanais] = [lista de valores por device]
+    # Dicionário: results[Metodo][NumCanais] = vetor indexado por cenário de devices
     methods = ['SA', 'SA_NoNOMA', 'QL', 'QL_NoNOMA']
-    res_data = {m: {ch: {'ntput': [], 'ndist': [], 'ntotal': []} for ch in Channels_Relays_List} for m in methods}
+    n_devices = len(Devices)
+    res_data = {
+        method: {
+            ch: {'ntput': np.zeros(n_devices), 'ndist': np.zeros(n_devices), 'ntotal': np.zeros(n_devices)}
+            for ch in Channels_Relays_List
+        }
+        for method in methods
+    }
 
-    # Loop Devices
-    for d_idx, num_dev in enumerate(Devices):
-        print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Number of Devices: {num_dev}/{max_devs}")
-        
-        # Calcular SNR para a distância atual
-        # Nota: Distance tem tamanho (max_devs, ...). Pegamos slice correto.
-        dist_slice = Distance[:num_dev, :, :]
-        h_slice = h_Nakagami[:num_dev, :, :]
-        
-        # Path loss
-        alpha_k_j = 10**(-(128.1 + 36.7 * np.log10(dist_slice)) / 10)
-        SNR = (P / N * alpha_k_j * h_slice**2)
+    task_args = [
+        (idx, int(num_dev), Channels_Relays_List, Relays, runs, frames, slots,
+         N, r, alpha, gamma, P, Distance, h_Nakagami)
+        for idx, num_dev in enumerate(Devices)
+    ]
 
-        # Loop Channels Configurations (1, 2, 3, 4 channels)
-        for ch_count in Channels_Relays_List:
-            
-            # --- SA-NOMA ---
-            tp, dist, total = SlottedAloha_MultipleChannels(num_dev, Relays, ch_count, runs, frames, slots, SNR, N, r)
-            res_data['SA'][ch_count]['ntput'].append(tp)
-            res_data['SA'][ch_count]['ndist'].append(dist)
-            res_data['SA'][ch_count]['ntotal'].append(total)
+    n_workers = min(os.cpu_count() or 1, n_devices)
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] "
+          f"Using {n_workers} parallel workers for {n_devices} device cases.")
 
-            # --- SA - without NOMA ---
-            tp, dist, total = SlottedAloha_MultipleChannels_NoNOMA(num_dev, Relays, ch_count, runs, frames, slots, SNR, N, r)
-            res_data['SA_NoNOMA'][ch_count]['ntput'].append(tp)
-            res_data['SA_NoNOMA'][ch_count]['ndist'].append(dist)
-            res_data['SA_NoNOMA'][ch_count]['ntotal'].append(total)
+    with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        futures = {executor.submit(_run_devices_iteration, args): args[0] for args in task_args}
+        for future in as_completed(futures):
+            idx, per_channel_results = future.result()
+            for ch_count in Channels_Relays_List:
+                sa_tp, sa_dist, sa_total = per_channel_results[ch_count]['SA']
+                sa_no_tp, sa_no_dist, sa_no_total = per_channel_results[ch_count]['SA_NoNOMA']
+                ql_tp, ql_dist, ql_total = per_channel_results[ch_count]['QL']
+                ql_no_tp, ql_no_dist, ql_no_total = per_channel_results[ch_count]['QL_NoNOMA']
 
-            # --- Q-Learning ---
-            QTable = InitializeQTable(num_dev, ch_count, slots, runs, True)
-            tp, dist, total = Qlearning_MultipleChannels(num_dev, Relays, ch_count, runs, frames, slots, SNR, N, r, QTable, alpha, gamma)
-            res_data['QL'][ch_count]['ntput'].append(tp)
-            res_data['QL'][ch_count]['ndist'].append(dist)
-            res_data['QL'][ch_count]['ntotal'].append(total)
+                res_data['SA'][ch_count]['ntput'][idx] = sa_tp
+                res_data['SA'][ch_count]['ndist'][idx] = sa_dist
+                res_data['SA'][ch_count]['ntotal'][idx] = sa_total
 
-            # --- Q-Learning without NOMA ---
-            QTable = InitializeQTable(num_dev, ch_count, slots, runs, True)
-            tp, dist, total = Qlearning_MultipleChannels_NoNOMA(num_dev, Relays, ch_count, runs, frames, slots, SNR, N, r, QTable, alpha, gamma)
-            res_data['QL_NoNOMA'][ch_count]['ntput'].append(tp)
-            res_data['QL_NoNOMA'][ch_count]['ndist'].append(dist)
-            res_data['QL_NoNOMA'][ch_count]['ntotal'].append(total)
+                res_data['SA_NoNOMA'][ch_count]['ntput'][idx] = sa_no_tp
+                res_data['SA_NoNOMA'][ch_count]['ndist'][idx] = sa_no_dist
+                res_data['SA_NoNOMA'][ch_count]['ntotal'][idx] = sa_no_total
+
+                res_data['QL'][ch_count]['ntput'][idx] = ql_tp
+                res_data['QL'][ch_count]['ndist'][idx] = ql_dist
+                res_data['QL'][ch_count]['ntotal'][idx] = ql_total
+
+                res_data['QL_NoNOMA'][ch_count]['ntput'][idx] = ql_no_tp
+                res_data['QL_NoNOMA'][ch_count]['ndist'][idx] = ql_no_dist
+                res_data['QL_NoNOMA'][ch_count]['ntotal'][idx] = ql_no_total
 
     # %% Processar Dados para Plotagem (Cálculo de Redundância)
     # Redundancy Rate = 100 * (1 - ndist / ntotal)

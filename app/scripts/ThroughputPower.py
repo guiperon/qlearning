@@ -14,7 +14,7 @@ from QLearning import InitializeQTable, Qlearning_MultipleChannels, Qlearning_Un
 # ==============================================================================
 # WORKER — runs a single power-level iteration in its own process
 # ==============================================================================
-def _run_power_level(args):
+def _run_power_iteration(args):
     (d, P_val, P_dBm_val, Devices, Relays, Channels_Relays,
      runs, slots, frames, alpha, gamma, r, N, Distance, h_Nakagami) = args
 
@@ -135,7 +135,7 @@ def run_simulation():
           f"Using {n_workers} parallel workers for {n_p} power levels.")
 
     with ProcessPoolExecutor(max_workers=n_workers) as executor:
-        futures = {executor.submit(_run_power_level, args): args[0] for args in task_args}
+        futures = {executor.submit(_run_power_iteration, args): args[0] for args in task_args}
         for future in as_completed(futures):
             d, sa_mc, ql_mc, ql_uc = future.result()
             for i in range(len(Channels_Relays)):
