@@ -19,7 +19,6 @@ services:
     #Criação das pontes entre o sistema de arquivos do host para o contêiner
     volumes:
       #<pasta do host>:<pasta do contêiner>:<opções de montagem>
-      - .:/workspaces/testepy:cached
       - .:/qlearning:cached #espelha a pasta local em /qlearning dentro do contêiner
     
     #Substitui o comando padrão que a imagem executaria ao ligar. Apenas abrir o terminal
