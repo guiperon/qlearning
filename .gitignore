@@ -28,6 +28,9 @@ env/
 .DS_Store
 Thumbs.db
 
+# Results
+./app/results/
+
 # Local configuration files
 configure_git_user.sh
 
