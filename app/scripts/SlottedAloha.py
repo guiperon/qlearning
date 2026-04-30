@@ -1,230 +1,199 @@
-import numpy as np
+import numpy as np  # Importa NumPy para operações numéricas com arrays
 
 def SlottedAloha_MultipleChannels(Devices, Relays, Channels_Relays, runs, frames, Slots, SNR, N, r):
     """
-    Simula o protocolo Slotted Aloha com múltiplos canais e NOMA.
-    
+    Simula o protocolo Slotted Aloha com múltiplos canais e NOMA (SIC).
+    Cada dispositivo escolhe aleatoriamente um slot e um canal para transmitir.
+    A decodificação usa Cancelamento Sucessivo de Interferência (SIC).
+
     Args:
-        Devices (int): Número de dispositivos.
-        Relays (int): Número de relés.
-        Channels_Relays (int): Número de canais disponíveis.
-        runs (int): Número de rodadas de simulação.
-        frames (int): Número de quadros.
-        Slots (int): Número de slots de tempo.
-        SNR (numpy.ndarray): Matriz de SNR (Devices x Relays x runs).
-        N (float): Potência do ruído.
-        r (float): Taxa alvo (threshold) para decodificação.
-        
+        Devices (int): Número total de dispositivos IoT na rede.
+        Relays (int): Número de relays (receptores) disponíveis.
+        Channels_Relays (int): Número de canais de frequência disponíveis.
+        runs (int): Número de rodadas Monte Carlo independentes.
+        frames (int): Número de quadros (frames) de transmissão.
+        Slots (int): Número de slots de tempo por quadro.
+        SNR (numpy.ndarray): Matriz de SNR com shape (Devices, Relays, runs).
+        N (float): Potência do ruído térmico (Watts).
+        r (float): Taxa alvo mínima (bps/Hz) para decodificação com sucesso.
+
     Returns:
-        tuple: (ntput, ndist, ntotal)
+        tuple: (ntput, ndist, ntotal) — throughput normalizado, tráfego distinto médio, tráfego total médio.
     """
-    
-    ThroughputRuns = []
-    TotalTraffic = np.zeros(runs)
-    TotalTrafficDistinct = np.zeros(runs)
 
-    # Loop Frames
+    ThroughputRuns = []                        # Lista para armazenar throughput médio de cada frame
+    TotalTraffic = np.zeros(runs)              # Acumulador de tráfego total (incluindo duplicatas) por rodada
+    TotalTrafficDistinct = np.zeros(runs)      # Acumulador de tráfego distinto (dispositivos únicos) por rodada
+
+    # --- Iteração sobre cada quadro de transmissão ---
     for l in range(frames):
-        SuccessTransmission = np.zeros((Devices, runs))
-        ThroughputFrame = np.zeros(runs)
-        
-        # Escolha aleatória de Slots e Canais
-        # MATLAB: randi(Slots) -> inteiros de 1 a Slots
-        # Python: np.random.randint(1, Slots + 1)
-        SlotChoosen = np.random.randint(1, Slots + 1, size=(Devices, runs))
-        ChannelChoosen = np.random.randint(1, Channels_Relays + 1, size=(Devices, runs))
+        SuccessTransmission = np.zeros((Devices, runs))  # Matriz de sucessos: conta quantas vezes cada dispositivo foi decodificado
+        ThroughputFrame = np.zeros(runs)                  # Throughput acumulado neste frame por rodada
 
-        # Loop Slots
+        # Cada dispositivo escolhe aleatoriamente um slot (1 a Slots) e um canal (1 a Channels_Relays)
+        SlotChoosen = np.random.randint(1, Slots + 1, size=(Devices, runs))              # Slot escolhido por cada dispositivo
+        ChannelChoosen = np.random.randint(1, Channels_Relays + 1, size=(Devices, runs)) # Canal escolhido por cada dispositivo
+
+        # --- Iteração sobre cada slot de tempo ---
         for k in range(1, Slots + 1):
-            # Loop Runs (Monte Carlo)
+            # --- Iteração Monte Carlo sobre cada rodada ---
             for s in range(runs):
-                # Encontrar dispositivos transmitindo no slot k, rodada s
-                TransmittingDevices = np.where(SlotChoosen[:, s] == k)[0]
-                TransmittingChannel = ChannelChoosen[TransmittingDevices, s]
+                # Identifica quais dispositivos escolheram transmitir no slot k, rodada s
+                TransmittingDevices = np.where(SlotChoosen[:, s] == k)[0]       # Índices dos dispositivos ativos
+                TransmittingChannel = ChannelChoosen[TransmittingDevices, s]     # Canal escolhido por cada dispositivo ativo
 
+                # Verifica se há pelo menos um dispositivo transmitindo neste slot
                 if len(TransmittingDevices) >= 1:
-                    # Extrair SNR para os dispositivos ativos nesta rodada
-                    # SNR shape: (Devices, Relays, runs)
-                    SNR_Device = SNR[TransmittingDevices, :, s]
-                    
-                    uniqueChannels = np.unique(TransmittingChannel)
+                    SNR_Device = SNR[TransmittingDevices, :, s]  # Extrai SNR dos dispositivos ativos para todos os relays
+                    uniqueChannels = np.unique(TransmittingChannel)  # Lista de canais distintos em uso neste slot
 
+                    # --- Processa cada canal separadamente ---
                     for c in uniqueChannels:
-                        # Filtros para o canal atual
-                        mask_channel = (TransmittingChannel == c)
-                        SNR_Device_Channel = SNR_Device[mask_channel, :]
-                        TransmittingDevices_channel = TransmittingDevices[mask_channel]
-                        
-                        # Ordenação Descendente (NOMA SIC)
-                        # MATLAB: sort(..., 1, 'descend') ordena cada coluna (relé) independentemente
-                        # Python: argsort retorna índices para ordenar
-                        # axis=0 ordena ao longo das linhas (dentro de cada coluna)
-                        sort_indexes = np.argsort(SNR_Device_Channel, axis=0)[::-1] # [::-1] inverte para descendente
-                        
-                        # Reordenar SNR e IDs dos dispositivos baseados na força do sinal para cada relé
-                        SNR_Device_ord = np.take_along_axis(SNR_Device_Channel, sort_indexes, axis=0)
-                        
-                        # Mapear os índices ordenados de volta para os IDs originais dos dispositivos
-                        # TransmittingDevices_channel é (N_devs,). sort_indexes é (N_devs, Relays).
-                        # O resultado deve ser (N_devs, Relays), indicando qual dispositivo é o 1º, 2º... em cada relé.
-                        TransmittingDevices_ord = TransmittingDevices_channel[sort_indexes]
+                        mask_channel = (TransmittingChannel == c)                          # Máscara booleana: dispositivos neste canal
+                        SNR_Device_Channel = SNR_Device[mask_channel, :]                   # SNR dos dispositivos neste canal específico
+                        TransmittingDevices_channel = TransmittingDevices[mask_channel]     # IDs dos dispositivos neste canal
 
-                        # Loop Relés
-                        # uniqueRelays no MATLAB era 1:1:Relays. Em Python iteramos range(Relays).
+                        # Ordena dispositivos do mais forte ao mais fraco (descendente) para SIC-NOMA
+                        sort_indexes = np.argsort(SNR_Device_Channel, axis=0)[::-1]                          # Índices de ordenação descendente por relay
+                        SNR_Device_ord = np.take_along_axis(SNR_Device_Channel, sort_indexes, axis=0)        # SNR reordenado (mais forte primeiro)
+                        TransmittingDevices_ord = TransmittingDevices_channel[sort_indexes]                   # IDs reordenados conforme a força do sinal
+
+                        # --- Processa cada relay independentemente ---
                         for rr in range(Relays):
-                            SIC_boolean = 0
-                            num_users_channel = SNR_Device_Channel.shape[0]
-                            
-                            # SIC Loop (Interference Cancellation)
+                            SIC_boolean = 0                                    # Flag de falha SIC: 0 = SIC ativo, 1 = SIC falhou
+                            num_users_channel = SNR_Device_Channel.shape[0]    # Número de usuários colidindo neste canal
+
+                            # --- Loop SIC: tenta decodificar do mais forte ao mais fraco ---
                             for jj in range(num_users_channel):
-                                # Interferência: Soma dos sinais mais fracos (abaixo do atual jj)
-                                # MATLAB: sum(SNR_Device_ord((jj+1):end, uniqueRelays(rr)))
-                                # Python: slice [jj+1:, rr]
-                                Interference = np.sum(SNR_Device_ord[jj+1:, rr])
-                                
-                                Signal = SNR_Device_ord[jj, rr]
-                                SINR = Signal / (Interference + N)
+                                Interference = np.sum(SNR_Device_ord[jj+1:, rr])  # Interferência = soma dos sinais mais fracos restantes
+                                Signal = SNR_Device_ord[jj, rr]                    # Potência do sinal do usuário atual
+                                SINR = Signal / (Interference + N)                 # Calcula SINR (sinal sobre interferência + ruído)
 
+                                # Verifica se a taxa alcançável supera o limiar e se o SIC ainda não falhou
                                 if (np.log2(1 + SINR) >= r) and (SIC_boolean == 0):
-                                    ThroughputFrame[s] += 1
-                                    
-                                    # Identificar o dispositivo que teve sucesso
-                                    device_id = TransmittingDevices_ord[jj, rr]
-                                    SuccessTransmission[device_id, s] += 1
+                                    ThroughputFrame[s] += 1                                    # Incrementa throughput do frame
+                                    device_id = TransmittingDevices_ord[jj, rr]                # Obtém o ID original do dispositivo decodificado
+                                    SuccessTransmission[device_id, s] += 1                     # Registra sucesso para este dispositivo
                                 else:
-                                    # Se falhar em decodificar o mais forte, SIC para para os subsequentes
-                                    SIC_boolean = 1
-        
-        # Estatísticas por Frame
-        # MATLAB: mean(sum(SuccessTransmission>0))/Slots
-        active_success = np.sum(SuccessTransmission > 0, axis=0) # Soma ao longo dos dispositivos
-        ThroughputRuns.append(np.mean(active_success) / Slots)
-        
-        TotalTrafficDistinct += active_success
-        TotalTraffic += np.sum(SuccessTransmission, axis=0)
+                                    SIC_boolean = 1  # Marca falha no SIC — para de decodificar os subsequentes
 
-    # Cálculos Finais
-    ndist = np.mean(TotalTrafficDistinct) / frames
-    ntotal = np.mean(TotalTraffic) / frames
-    
-    # Evitar divisão por zero se não houver tráfego
+        # --- Estatísticas ao final de cada frame ---
+        active_success = np.sum(SuccessTransmission > 0, axis=0)      # Conta dispositivos únicos com pelo menos 1 sucesso por rodada
+        ThroughputRuns.append(np.mean(active_success) / Slots)        # Throughput médio normalizado por slots
+        TotalTrafficDistinct += active_success                         # Acumula tráfego distinto ao longo dos frames
+        TotalTraffic += np.sum(SuccessTransmission, axis=0)           # Acumula tráfego total (com duplicatas)
+
+    # --- Cálculos finais de desempenho ---
+    ndist = np.mean(TotalTrafficDistinct) / frames    # Média de dispositivos distintos por frame
+    ntotal = np.mean(TotalTraffic) / frames           # Média de transmissões totais por frame
+
+    # Evita divisão por zero caso não haja tráfego
     if ntotal == 0:
-        ratio = 0
+        ratio = 0           # Razão nula se não houve tráfego
     else:
-        ratio = ndist / ntotal
-        
+        ratio = ndist / ntotal  # Razão entre tráfego distinto e total (proporção de mensagens úteis)
+
+    # Throughput normalizado final: pondera pela taxa alvo, número de canais e razão de utilidade
     ntput = (r / Channels_Relays) * np.mean(ThroughputRuns) * ratio
-    
-    return ntput, ndist, ntotal
+
+    return ntput, ndist, ntotal  # Retorna throughput normalizado, tráfego distinto e tráfego total
 
 
 
 
 def SlottedAloha_MultipleChannels_NoNOMA(Devices, Relays, Channels_Relays, runs, frames, Slots, SNR, N, r):
     """
-    Simula o protocolo Slotted Aloha com múltiplos canais SEM NOMA (apenas Capture Effect).
-    
+    Simula o protocolo Slotted Aloha com múltiplos canais SEM NOMA (apenas Efeito Captura).
+    Diferente da versão com NOMA, aqui apenas o dispositivo com sinal mais forte é decodificado.
+
     Args:
-        Devices (int): Número de dispositivos.
-        Relays (int): Número de relés.
-        Channels_Relays (int): Número de canais disponíveis.
-        runs (int): Número de rodadas de simulação.
-        frames (int): Número de quadros.
-        Slots (int): Número de slots de tempo.
-        SNR (numpy.ndarray): Matriz de SNR (Devices x Relays x runs).
-        N (float): Potência do ruído.
-        r (float): Taxa alvo (threshold) para decodificação.
-        
+        Devices (int): Número total de dispositivos IoT na rede.
+        Relays (int): Número de relays (receptores) disponíveis.
+        Channels_Relays (int): Número de canais de frequência disponíveis.
+        runs (int): Número de rodadas Monte Carlo independentes.
+        frames (int): Número de quadros de transmissão.
+        Slots (int): Número de slots de tempo por quadro.
+        SNR (numpy.ndarray): Matriz de SNR com shape (Devices, Relays, runs).
+        N (float): Potência do ruído térmico (Watts).
+        r (float): Taxa alvo mínima (bps/Hz) para decodificação com sucesso.
+
     Returns:
-        tuple: (ntput, ndist, ntotal)
+        tuple: (ntput, ndist, ntotal) — throughput normalizado, tráfego distinto médio, tráfego total médio.
     """
-    
-    ThroughputRuns = []
-    TotalTraffic = np.zeros(runs)
-    TotalTrafficDistinct = np.zeros(runs)
 
-    # Loop Frames
+    ThroughputRuns = []                        # Lista para armazenar throughput médio de cada frame
+    TotalTraffic = np.zeros(runs)              # Acumulador de tráfego total por rodada
+    TotalTrafficDistinct = np.zeros(runs)      # Acumulador de tráfego distinto por rodada
+
+    # --- Iteração sobre cada quadro de transmissão ---
     for l in range(frames):
-        SuccessTransmission = np.zeros((Devices, runs))
-        ThroughputFrame = np.zeros(runs)
-        
-        # Escolha aleatória de Slots e Canais
-        # (1 a Slots+1) para manter compatibilidade lógica, embora python seja 0-indexed
-        SlotChoosen = np.random.randint(1, Slots + 1, size=(Devices, runs))
-        ChannelChoosen = np.random.randint(1, Channels_Relays + 1, size=(Devices, runs))
+        SuccessTransmission = np.zeros((Devices, runs))  # Matriz de sucessos por dispositivo e rodada
+        ThroughputFrame = np.zeros(runs)                  # Throughput acumulado neste frame
 
-        # Loop Slots
+        # Cada dispositivo escolhe aleatoriamente um slot e um canal (indexação 1-based)
+        SlotChoosen = np.random.randint(1, Slots + 1, size=(Devices, runs))              # Slot escolhido por cada dispositivo
+        ChannelChoosen = np.random.randint(1, Channels_Relays + 1, size=(Devices, runs)) # Canal escolhido por cada dispositivo
+
+        # --- Iteração sobre cada slot de tempo ---
         for k in range(1, Slots + 1):
-            # Loop Runs
+            # --- Iteração Monte Carlo sobre cada rodada ---
             for s in range(runs):
-                # Identificar dispositivos transmitindo no slot k
-                TransmittingDevices = np.where(SlotChoosen[:, s] == k)[0]
-                TransmittingChannel = ChannelChoosen[TransmittingDevices, s]
+                # Identifica dispositivos transmitindo no slot k da rodada s
+                TransmittingDevices = np.where(SlotChoosen[:, s] == k)[0]       # Índices dos dispositivos ativos
+                TransmittingChannel = ChannelChoosen[TransmittingDevices, s]     # Canal de cada dispositivo ativo
 
+                # Verifica se há dispositivos transmitindo
                 if len(TransmittingDevices) >= 1:
-                    # Extrair SNR (Devices x Relays) para a rodada 's'
-                    SNR_Device = SNR[TransmittingDevices, :, s]
-                    
-                    uniqueChannels = np.unique(TransmittingChannel)
+                    SNR_Device = SNR[TransmittingDevices, :, s]       # SNR dos dispositivos ativos para todos os relays
+                    uniqueChannels = np.unique(TransmittingChannel)   # Canais distintos em uso neste slot
 
+                    # --- Processa cada canal separadamente ---
                     for c in uniqueChannels:
-                        # Filtros para o canal atual
-                        mask_channel = (TransmittingChannel == c)
-                        SNR_Device_Channel = SNR_Device[mask_channel, :]
-                        TransmittingDevices_channel = TransmittingDevices[mask_channel]
-                        
-                        # Ordenação Descendente (Similar ao NOMA, para achar o mais forte)
-                        # Axis 0 = ordena as linhas (dispositivos) dentro de cada coluna (relé)
-                        sort_indexes = np.argsort(SNR_Device_Channel, axis=0)[::-1]
-                        
-                        # Reordenar SNR e IDs
-                        SNR_Device_ord = np.take_along_axis(SNR_Device_Channel, sort_indexes, axis=0)
-                        
-                        # Mapear IDs originais para a matriz ordenada (Devices x Relays)
-                        TransmittingDevices_ord = TransmittingDevices_channel[sort_indexes]
+                        mask_channel = (TransmittingChannel == c)                          # Máscara: dispositivos neste canal
+                        SNR_Device_Channel = SNR_Device[mask_channel, :]                   # SNR dos dispositivos neste canal
+                        TransmittingDevices_channel = TransmittingDevices[mask_channel]     # IDs dos dispositivos neste canal
 
-                        # Loop Relés
+                        # Ordena do mais forte ao mais fraco para identificar o dispositivo dominante
+                        sort_indexes = np.argsort(SNR_Device_Channel, axis=0)[::-1]                          # Índices de ordenação descendente
+                        SNR_Device_ord = np.take_along_axis(SNR_Device_Channel, sort_indexes, axis=0)        # SNR reordenado
+                        TransmittingDevices_ord = TransmittingDevices_channel[sort_indexes]                   # IDs reordenados
+
+                        # --- Processa cada relay ---
                         for rr in range(Relays):
-                            SIC_boolean = 0
-                            
-                            # Loop jj=1:1 (NoNOMA / Capture Effect)
-                            # Tenta decodificar APENAS o primeiro (mais forte)
-                            for jj in range(1): 
-                                if SNR_Device_ord.shape[0] > jj: # Verifica se existe pelo menos 1 usuário
-                                    
-                                    # Interferência: Soma de todos os outros sinais (do 2º em diante)
-                                    Interference = np.sum(SNR_Device_ord[jj+1:, rr])
-                                    
-                                    Signal = SNR_Device_ord[jj, rr]
-                                    SINR = Signal / (Interference + N)
+                            SIC_boolean = 0  # Flag de falha (mantida por compatibilidade com a estrutura NOMA)
 
-                                    # Verifica condição de sucesso e se o SIC não falhou (irrelevante aqui pois só roda 1x, mas mantido pela lógica)
+                            # Sem NOMA: tenta decodificar APENAS o usuário mais forte (range(1) = só índice 0)
+                            for jj in range(1):
+                                if SNR_Device_ord.shape[0] > jj:  # Garante que existe pelo menos 1 usuário
+                                    Interference = np.sum(SNR_Device_ord[jj+1:, rr])  # Interferência dos demais dispositivos
+                                    Signal = SNR_Device_ord[jj, rr]                    # Sinal do dispositivo mais forte
+                                    SINR = Signal / (Interference + N)                 # Calcula SINR
+
+                                    # Verifica se a taxa alcançável supera o limiar
                                     if (np.log2(1 + SINR) >= r) and (SIC_boolean == 0):
-                                        ThroughputFrame[s] += 1
-                                        
-                                        # Contabilizar sucesso para o dispositivo específico
-                                        device_id = TransmittingDevices_ord[jj, rr]
-                                        SuccessTransmission[device_id, s] += 1
+                                        ThroughputFrame[s] += 1                            # Incrementa throughput
+                                        device_id = TransmittingDevices_ord[jj, rr]        # ID do dispositivo decodificado
+                                        SuccessTransmission[device_id, s] += 1             # Registra sucesso
                                     else:
-                                        SIC_boolean = 1
-        
-        # Cálculo de estatísticas do Frame
-        # Soma sucessos únicos por run (>0 transforma contagem em booleano)
-        active_success = np.sum(SuccessTransmission > 0, axis=0)
-        
-        ThroughputRuns.append(np.mean(active_success) / Slots)
-        TotalTrafficDistinct += active_success
-        TotalTraffic += np.sum(SuccessTransmission, axis=0)
+                                        SIC_boolean = 1  # Marca falha na decodificação
 
-    # Médias finais
-    ndist = np.mean(TotalTrafficDistinct) / frames
-    ntotal = np.mean(TotalTraffic) / frames
-    
+        # --- Estatísticas ao final de cada frame ---
+        active_success = np.sum(SuccessTransmission > 0, axis=0)      # Dispositivos únicos com sucesso por rodada
+        ThroughputRuns.append(np.mean(active_success) / Slots)        # Throughput normalizado médio
+        TotalTrafficDistinct += active_success                         # Acumula tráfego distinto
+        TotalTraffic += np.sum(SuccessTransmission, axis=0)           # Acumula tráfego total
+
+    # --- Cálculos finais de desempenho ---
+    ndist = np.mean(TotalTrafficDistinct) / frames    # Média de dispositivos distintos decodificados por frame
+    ntotal = np.mean(TotalTraffic) / frames           # Média de decodificações totais por frame
+
+    # Evita divisão por zero
     if ntotal == 0:
-        ratio = 0
+        ratio = 0           # Sem tráfego, razão é zero
     else:
-        ratio = ndist / ntotal
-        
+        ratio = ndist / ntotal  # Proporção de mensagens úteis (distintas / total)
+
+    # Throughput normalizado final
     ntput = (r / Channels_Relays) * np.mean(ThroughputRuns) * ratio
-    
-    return ntput, ndist, ntotal
+
+    return ntput, ndist, ntotal  # Retorna throughput normalizado, tráfego distinto e total

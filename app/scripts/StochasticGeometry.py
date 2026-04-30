@@ -1,32 +1,42 @@
-import numpy as np
+import numpy as np  # Importa NumPy para operações numéricas com arrays
 
 def StochasticGeometry(Devices, Relays, Radius, runs):
     """
-    Versão vetorizada para alta performance.
+    Gera posições aleatórias de dispositivos e relays dentro de uma célula circular
+    e calcula a matriz de distâncias euclidianas entre eles.
+    
+    Args:
+        Devices (int): Número de dispositivos IoT a posicionar na célula.
+        Relays (int): Número de nós relays a posicionar na célula.
+        Radius (float): Raio da célula circular (metros).
+        runs (int): Número de rodadas independentes de simulação Monte Carlo.
+
+    Returns:
+        numpy.ndarray: Matriz 3D de distâncias com shape (Devices, Relays, runs),
+                       em que cada entrada [d, r, run] é a distância em metros
+                       entre o dispositivo d e o relay r na rodada 'run'.
     """
-    # 1. Gerar posições de TODOS os Relés de uma vez
-    # Shape: (Relays, runs)
-    r_rel = Radius * np.sqrt(np.random.rand(Relays, runs))
-    th_rel = 2 * np.pi * np.random.rand(Relays, runs)
-    x_rel = r_rel * np.cos(th_rel)
-    y_rel = r_rel * np.sin(th_rel)
 
-    # 2. Gerar posições de TODOS os Dispositivos de uma vez
-    # Shape: (Devices, runs)
-    r_dev = Radius * np.sqrt(np.random.rand(Devices, runs))
-    th_dev = 2 * np.pi * np.random.rand(Devices, runs)
-    x_dev = r_dev * np.cos(th_dev)
-    y_dev = r_dev * np.sin(th_dev)
+    # --- Passo 1: Gerar posições dos relays aleatoriamente dentro da célula circular ---
+    # Usa sqrt(uniforme) para garantir distribuição uniforme sobre a área circular
+    r_rel = Radius * np.sqrt(np.random.rand(Relays, runs))    # Distância radial de cada relay por rodada
+    th_rel = 2 * np.pi * np.random.rand(Relays, runs)         # Ângulo polar (0 a 2π) de cada relay por rodada
+    x_rel = r_rel * np.cos(th_rel)                            # Converte coordenada polar para X cartesiano
+    y_rel = r_rel * np.sin(th_rel)                            # Converte coordenada polar para Y cartesiano
 
-    # 3. Calcular distâncias usando Broadcasting (evita loops)
-    # Expandimos as dimensões para: (Devices, 1, runs) e (1, Relays, runs)
-    # O resultado será (Devices, Relays, runs)
-    
-    # Diferença nas coordenadas X e Y
-    diff_x = x_dev[:, np.newaxis, :] - x_rel[np.newaxis, :, :]
-    diff_y = y_dev[:, np.newaxis, :] - y_rel[np.newaxis, :, :]
-    
-    # Distância Euclidiana
+    # --- Passo 2: Gerar posições dos dispositivos aleatoriamente dentro da célula circular ---
+    r_dev = Radius * np.sqrt(np.random.rand(Devices, runs))   # Distância radial de cada dispositivo por rodada
+    th_dev = 2 * np.pi * np.random.rand(Devices, runs)        # Ângulo polar (0 a 2π) de cada dispositivo por rodada
+    x_dev = r_dev * np.cos(th_dev)                            # Converte coordenada polar para X cartesiano
+    y_dev = r_dev * np.sin(th_dev)                            # Converte coordenada polar para Y cartesiano
+
+    # --- Passo 3: Calcular distâncias par-a-par via broadcasting do NumPy ---
+    # Expande dimensões: dispositivos -> (Devices, 1, runs), relays -> (1, Relays, runs)
+    # O broadcasting produz automaticamente shape (Devices, Relays, runs)
+    diff_x = x_dev[:, np.newaxis, :] - x_rel[np.newaxis, :, :]  # Diferença no eixo X entre cada par dispositivo-relay
+    diff_y = y_dev[:, np.newaxis, :] - y_rel[np.newaxis, :, :]  # Diferença no eixo Y entre cada par dispositivo-relay
+
+    # Calcula a distância Euclidiana para cada tripla (dispositivo, relay, rodada)
     c = np.sqrt(diff_x**2 + diff_y**2)
-    
-    return c
+
+    return c  # Retorna a matriz 3D completa de distâncias
