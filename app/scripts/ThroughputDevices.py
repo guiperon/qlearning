@@ -1,5 +1,6 @@
 import numpy as np                                   # Importa NumPy para operações numéricas com arrays
 import matplotlib.pyplot as plt                      # Importa interface de plotagem do Matplotlib
+from matplotlib.lines import Line2D                  # Importa Line2D para construção de legendas customizadas
 from datetime import datetime                        # Importa datetime para timestamps nas mensagens de log
 import os                                            # Importa os para manipulação de caminhos e processos
 from concurrent.futures import ProcessPoolExecutor, as_completed  # Importa executor de processos paralelos
@@ -7,6 +8,115 @@ from concurrent.futures import ProcessPoolExecutor, as_completed  # Importa exec
 from StochasticGeometry import StochasticGeometry    # Importa gerador de geometria estocástica
 from SlottedAloha import SlottedAloha_MultipleChannels, SlottedAloha_MultipleChannels_NoNOMA  # Importa simuladores SA
 from QLearning import InitializeQTable, Qlearning_MultipleChannels, Qlearning_MultipleChannels_NoNOMA  # Importa funções QL
+
+# ==============================================================================
+# TOPOLOGIA — visualização da clusterização RSSI
+# ==============================================================================
+
+def plot_topology_clusters(x_dev, y_dev, x_rel, y_rel, ClusterAssignment,
+                           cell_radius, n_dev, n_relays, runs, output_dir):
+    """
+    Gera e salva figura com a topologia de cada rodada Monte Carlo,
+    colorindo os dispositivos pelo cluster (relay) ao qual foram associados via RSSI.
+
+    Args:
+        x_dev, y_dev (ndarray): Coordenadas cartesianas dos dispositivos, shape (max_devs, runs).
+        x_rel, y_rel (ndarray): Coordenadas cartesianas dos relays, shape (Relays, runs).
+        ClusterAssignment (ndarray): Índice do relay associado a cada dispositivo por rodada,
+                                     shape (n_dev, runs).
+        cell_radius (float): Raio da célula em metros.
+        n_dev (int): Número de dispositivos a visualizar.
+        n_relays (int): Número de relays.
+        runs (int): Número de rodadas Monte Carlo (um subplot por rodada).
+        output_dir (str): Diretório onde o arquivo PNG será salvo.
+    """
+    # Paleta de cores e marcadores (um por relay)
+    cluster_colors = ['tab:blue', 'tab:orange', 'tab:green', 'tab:red',
+                      'tab:purple', 'tab:brown', 'tab:pink', 'tab:gray']
+    relay_markers  = ['*', 'D', 's', '^', 'P', 'X']
+
+    # Grade de subplots: até 5 colunas
+    ncols = min(5, runs)
+    nrows = int(np.ceil(runs / ncols))
+
+    fig, axes = plt.subplots(nrows, ncols,
+                             figsize=(4 * ncols, 4 * nrows + 0.8),
+                             squeeze=False)
+    axes_flat = axes.flatten()
+
+    # Contorno circular da célula (convertido para km)
+    theta_circ = np.linspace(0, 2 * np.pi, 300)
+    xc = cell_radius / 1e3 * np.cos(theta_circ)
+    yc = cell_radius / 1e3 * np.sin(theta_circ)
+
+    for run_idx in range(runs):
+        ax = axes_flat[run_idx]
+        ax.plot(xc, yc, 'k--', linewidth=0.8, alpha=0.5)        # Borda da célula
+
+        assignment = ClusterAssignment[:, run_idx]               # shape (n_dev,)
+
+        # Plota dispositivos agrupados por cluster
+        for relay_idx in range(n_relays):
+            mask = (assignment == relay_idx)
+            if mask.any():
+                ax.scatter(
+                    x_dev[:n_dev, run_idx][mask] / 1e3,
+                    y_dev[:n_dev, run_idx][mask] / 1e3,
+                    c=cluster_colors[relay_idx % len(cluster_colors)],
+                    s=12, alpha=0.65, zorder=2
+                )
+
+        # Plota relays com marcadores distintos
+        for relay_idx in range(n_relays):
+            ax.scatter(
+                x_rel[relay_idx, run_idx] / 1e3,
+                y_rel[relay_idx, run_idx] / 1e3,
+                marker=relay_markers[relay_idx % len(relay_markers)],
+                c=cluster_colors[relay_idx % len(cluster_colors)],
+                s=160, edgecolors='black', linewidths=0.8, zorder=5
+            )
+            ax.annotate(
+                f'R{relay_idx + 1}',
+                xy=(x_rel[relay_idx, run_idx] / 1e3,
+                    y_rel[relay_idx, run_idx] / 1e3),
+                xytext=(4, 4), textcoords='offset points',
+                fontsize=7, fontweight='bold'
+            )
+
+        ax.set_title(f'Run {run_idx + 1}', fontsize=9)
+        ax.set_aspect('equal')
+        ax.set_xlabel('x (km)', fontsize=7)
+        ax.set_ylabel('y (km)', fontsize=7)
+        ax.tick_params(labelsize=6)
+        ax.grid(True, linewidth=0.3, alpha=0.5)
+
+    # Esconde subplots extras (quando runs não é múltiplo de ncols)
+    for i in range(runs, len(axes_flat)):
+        axes_flat[i].set_visible(False)
+
+    # Legenda global indicando o cluster de cada relay
+    legend_elements = [
+        Line2D([0], [0], marker='o', color='w',
+               markerfacecolor=cluster_colors[i % len(cluster_colors)],
+               markersize=9, label=f'Cluster Relay {i + 1}')
+        for i in range(n_relays)
+    ]
+    fig.legend(handles=legend_elements, loc='lower center',
+               ncol=n_relays, fontsize=9,
+               bbox_to_anchor=(0.5, 0.0), frameon=True)
+
+    fig.suptitle(
+        f'Network Topology — {n_dev} Devices, {n_relays} Relays\n'
+        f'RSSI-based clustering (one subplot per Monte Carlo run)',
+        fontsize=11
+    )
+    plt.tight_layout(rect=[0, 0.07, 1, 1])   # Reserva espaço inferior para a legenda
+
+    out = os.path.join(output_dir, 'Topology_Clusters.png')
+    plt.savefig(out, bbox_inches='tight', dpi=150)
+    plt.close(fig)
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Saved topology plot to: {out}")
+
 
 # ==============================================================================
 # WORKER — executa uma iteração de dispositivos em seu próprio processo
@@ -40,30 +150,34 @@ def _run_devices_iteration(args):
     # Calcula SNR recebida
     SNR = (P / N * alpha_k_j * h_slice**2)
 
+    # Clusterização distribuída: cada dispositivo seleciona o relay com maior SNR médio (RSSI)
+    # ClusterAssignment[d, s] = índice do relay com o maior SNR para o dispositivo d na rodada s
+    ClusterAssignment = np.argmax(SNR, axis=1)  # shape (num_dev, runs)
+
     per_channel_results = {}                         # Dicionário para armazenar resultados por número de canais
 
     # Itera sobre cada configuração de número de canais
     for ch_count in Channels_Relays_List:
         # --- Slotted Aloha com NOMA ---
         tp, dist, total = SlottedAloha_MultipleChannels(
-            num_dev, Relays, ch_count, runs, frames, slots, SNR, N, r
+            num_dev, Relays, ch_count, runs, frames, slots, SNR, N, r, ClusterAssignment
         )
 
         # --- Slotted Aloha sem NOMA (apenas Efeito Captura) ---
         tp_nonoma, dist_nonoma, total_nonoma = SlottedAloha_MultipleChannels_NoNOMA(
-            num_dev, Relays, ch_count, runs, frames, slots, SNR, N, r
+            num_dev, Relays, ch_count, runs, frames, slots, SNR, N, r, ClusterAssignment
         )
 
         # --- Q-Learning com NOMA ---
         QTable = InitializeQTable(num_dev, ch_count, slots, runs, True)     # Q-Table inicializada com zeros
         tp_ql, dist_ql, total_ql = Qlearning_MultipleChannels(
-            num_dev, Relays, ch_count, runs, frames, slots, SNR, N, r, QTable, alpha, gamma
+            num_dev, Relays, ch_count, runs, frames, slots, SNR, N, r, QTable, alpha, gamma, ClusterAssignment
         )
 
         # --- Q-Learning sem NOMA ---
         QTable = InitializeQTable(num_dev, ch_count, slots, runs, True)     # Reinicializa Q-Table
         tp_ql_nonoma, dist_ql_nonoma, total_ql_nonoma = Qlearning_MultipleChannels_NoNOMA(
-            num_dev, Relays, ch_count, runs, frames, slots, SNR, N, r, QTable, alpha, gamma
+            num_dev, Relays, ch_count, runs, frames, slots, SNR, N, r, QTable, alpha, gamma, ClusterAssignment
         )
 
         # Armazena resultados dos 4 métodos para este número de canais
@@ -115,7 +229,7 @@ def run_simulation():
     cell_radius = 5e3                                # Raio da célula (5 km)
 
     # --- Parâmetros de Simulação ---
-    runs = 100                                       # Rodadas Monte Carlo
+    runs = 10                                       # Rodadas Monte Carlo
     slots = 100                                      # Slots de tempo por quadro
     frames = 50                                      # Quadros de transmissão
 
@@ -129,7 +243,10 @@ def run_simulation():
     max_devs = np.max(Devices)                       # Máximo de dispositivos (para pré-alocar)
     max_relays = Relays                              # Número fixo de relays (4)
 
-    Distance = StochasticGeometry(max_devs, max_relays, cell_radius, runs)  # Distâncias (max_devs x Relays x runs)
+    # Coordenadas cartesianas também são retornadas para a figura de topologia
+    Distance, x_dev, y_dev, x_rel, y_rel = StochasticGeometry(
+        max_devs, max_relays, cell_radius, runs, return_coords=True
+    )  # Distâncias (max_devs x Relays x runs) + coordenadas (max_devs x runs) e (Relays x runs)
 
     # Geração do canal Nakagami complexo
     shape_k = m / 2                                  # Parâmetro shape da distribuição Gamma
@@ -139,6 +256,21 @@ def run_simulation():
     h_real = np.sqrt(np.random.gamma(shape_k, scale_theta, size_h))    # Parte real do canal
     h_imag = np.sqrt(np.random.gamma(shape_k, scale_theta, size_h))    # Parte imaginária do canal
     h_Nakagami = np.abs((h_real + 1j * h_imag) / np.sqrt(m))           # Módulo normalizado
+
+    # --- Figura de Topologia: mostra os clusters RSSI para o menor cenário de dispositivos ---
+    n_dev_plot = int(Devices[0])                                         # Usa o menor número de dispositivos
+    dist_plot   = Distance[:n_dev_plot, :, :]                            # Fatia de distâncias para n_dev_plot
+    h_plot      = h_Nakagami[:n_dev_plot, :, :]                         # Fatia de canal para n_dev_plot
+    alpha_plot  = 10**(-(128.1 + 36.7 * np.log10(dist_plot)) / 10)     # Atenuação de percurso
+    SNR_plot    = P / N * alpha_plot * h_plot**2                        # SNR por dispositivo-relay-rodada
+    ClusterAssignment_plot = np.argmax(SNR_plot, axis=1)                # shape (n_dev_plot, runs)
+
+    script_dir_pre = os.path.dirname(os.path.abspath(__file__))
+    results_dir = os.path.join(script_dir_pre, '..', 'results')
+    plot_topology_clusters(
+        x_dev, y_dev, x_rel, y_rel, ClusterAssignment_plot,
+        cell_radius, n_dev_plot, Relays, runs, results_dir
+    )
 
     # --- Pré-alocação das estruturas de resultados ---
     # Dicionário aninhado: res_data[método][num_canais] = {ntput, ndist, ntotal}

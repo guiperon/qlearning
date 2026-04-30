@@ -1,6 +1,6 @@
 import numpy as np  # Importa NumPy para operações numéricas com arrays
 
-def SlottedAloha_MultipleChannels(Devices, Relays, Channels_Relays, runs, frames, Slots, SNR, N, r):
+def SlottedAloha_MultipleChannels(Devices, Relays, Channels_Relays, runs, frames, Slots, SNR, N, r, ClusterAssignment=None):
     """
     Simula o protocolo Slotted Aloha com múltiplos canais e NOMA (SIC).
     Cada dispositivo escolhe aleatoriamente um slot e um canal para transmitir.
@@ -16,6 +16,10 @@ def SlottedAloha_MultipleChannels(Devices, Relays, Channels_Relays, runs, frames
         SNR (numpy.ndarray): Matriz de SNR com shape (Devices, Relays, runs).
         N (float): Potência do ruído térmico (Watts).
         r (float): Taxa alvo mínima (bps/Hz) para decodificação com sucesso.
+        ClusterAssignment (numpy.ndarray, optional): Índice do relay atribuído a cada dispositivo
+            por rodada, shape (Devices, runs). Se None, todos os relays processam todos os
+            dispositivos (comportamento original). Se fornecido, cada relay processa apenas os
+            dispositivos a ele atribuídos (clusterização distribuída por RSSI).
 
     Returns:
         tuple: (ntput, ndist, ntotal) — throughput normalizado, tráfego distinto médio, tráfego total médio.
@@ -53,29 +57,56 @@ def SlottedAloha_MultipleChannels(Devices, Relays, Channels_Relays, runs, frames
                         SNR_Device_Channel = SNR_Device[mask_channel, :]                   # SNR dos dispositivos neste canal específico
                         TransmittingDevices_channel = TransmittingDevices[mask_channel]     # IDs dos dispositivos neste canal
 
-                        # Ordena dispositivos do mais forte ao mais fraco (descendente) para SIC-NOMA
-                        sort_indexes = np.argsort(SNR_Device_Channel, axis=0)[::-1]                          # Índices de ordenação descendente por relay
-                        SNR_Device_ord = np.take_along_axis(SNR_Device_Channel, sort_indexes, axis=0)        # SNR reordenado (mais forte primeiro)
-                        TransmittingDevices_ord = TransmittingDevices_channel[sort_indexes]                   # IDs reordenados conforme a força do sinal
+                        if ClusterAssignment is None:
+                            # --- Sem clusterização: todos os relays processam todos os dispositivos ---
+                            sort_indexes = np.argsort(SNR_Device_Channel, axis=0)[::-1]                          # Índices de ordenação descendente por relay
+                            SNR_Device_ord = np.take_along_axis(SNR_Device_Channel, sort_indexes, axis=0)        # SNR reordenado (mais forte primeiro)
+                            TransmittingDevices_ord = TransmittingDevices_channel[sort_indexes]                   # IDs reordenados conforme a força do sinal
 
-                        # --- Processa cada relay independentemente ---
-                        for rr in range(Relays):
-                            SIC_boolean = 0                                    # Flag de falha SIC: 0 = SIC ativo, 1 = SIC falhou
-                            num_users_channel = SNR_Device_Channel.shape[0]    # Número de usuários colidindo neste canal
+                            for rr in range(Relays):
+                                SIC_boolean = 0
+                                num_users_channel = SNR_Device_Channel.shape[0]
 
-                            # --- Loop SIC: tenta decodificar do mais forte ao mais fraco ---
-                            for jj in range(num_users_channel):
-                                Interference = np.sum(SNR_Device_ord[jj+1:, rr])  # Interferência = soma dos sinais mais fracos restantes
-                                Signal = SNR_Device_ord[jj, rr]                    # Potência do sinal do usuário atual
-                                SINR = Signal / (Interference + N)                 # Calcula SINR (sinal sobre interferência + ruído)
+                                for jj in range(num_users_channel):
+                                    Interference = np.sum(SNR_Device_ord[jj+1:, rr])
+                                    Signal = SNR_Device_ord[jj, rr]
+                                    SINR = Signal / (Interference + N)
 
-                                # Verifica se a taxa alcançável supera o limiar e se o SIC ainda não falhou
-                                if (np.log2(1 + SINR) >= r) and (SIC_boolean == 0):
-                                    ThroughputFrame[s] += 1                                    # Incrementa throughput do frame
-                                    device_id = TransmittingDevices_ord[jj, rr]                # Obtém o ID original do dispositivo decodificado
-                                    SuccessTransmission[device_id, s] += 1                     # Registra sucesso para este dispositivo
-                                else:
-                                    SIC_boolean = 1  # Marca falha no SIC — para de decodificar os subsequentes
+                                    if (np.log2(1 + SINR) >= r) and (SIC_boolean == 0):
+                                        ThroughputFrame[s] += 1
+                                        device_id = TransmittingDevices_ord[jj, rr]
+                                        SuccessTransmission[device_id, s] += 1
+                                    else:
+                                        SIC_boolean = 1
+                        else:
+                            # --- Com clusterização RSSI: cada relay processa apenas seus dispositivos atribuídos ---
+                            DeviceRelay_channel = ClusterAssignment[TransmittingDevices_channel, s]  # Relay atribuído a cada dispositivo ativo neste canal
+
+                            for rr in range(Relays):
+                                mask_relay = (DeviceRelay_channel == rr)       # Filtra dispositivos atribuídos ao relay rr
+                                if not np.any(mask_relay):
+                                    continue                                    # Nenhum dispositivo atribuído a este relay neste slot/canal
+
+                                SNR_Relay = SNR_Device_Channel[mask_relay, :]              # SNR dos dispositivos do cluster rr
+                                Devices_relay = TransmittingDevices_channel[mask_relay]    # IDs dos dispositivos do cluster rr
+
+                                # Ordena dispositivos do mais forte ao mais fraco no relay rr (critério RSSI)
+                                sort_idx = np.argsort(SNR_Relay[:, rr])[::-1]
+                                SNR_Relay_ord = SNR_Relay[sort_idx, :]
+                                Devices_relay_ord = Devices_relay[sort_idx]
+
+                                # --- Loop SIC: decodifica do mais forte ao mais fraco ---
+                                SIC_boolean = 0
+                                for jj in range(len(Devices_relay_ord)):
+                                    Interference = np.sum(SNR_Relay_ord[jj+1:, rr])  # Interferência dos sinais mais fracos restantes
+                                    Signal = SNR_Relay_ord[jj, rr]                    # Potência do sinal do usuário atual
+                                    SINR = Signal / (Interference + N)
+
+                                    if (np.log2(1 + SINR) >= r) and (SIC_boolean == 0):
+                                        ThroughputFrame[s] += 1
+                                        SuccessTransmission[Devices_relay_ord[jj], s] += 1
+                                    else:
+                                        SIC_boolean = 1  # Marca falha no SIC — para de decodificar os subsequentes
 
         # --- Estatísticas ao final de cada frame ---
         active_success = np.sum(SuccessTransmission > 0, axis=0)      # Conta dispositivos únicos com pelo menos 1 sucesso por rodada
@@ -101,7 +132,7 @@ def SlottedAloha_MultipleChannels(Devices, Relays, Channels_Relays, runs, frames
 
 
 
-def SlottedAloha_MultipleChannels_NoNOMA(Devices, Relays, Channels_Relays, runs, frames, Slots, SNR, N, r):
+def SlottedAloha_MultipleChannels_NoNOMA(Devices, Relays, Channels_Relays, runs, frames, Slots, SNR, N, r, ClusterAssignment=None):
     """
     Simula o protocolo Slotted Aloha com múltiplos canais SEM NOMA (apenas Efeito Captura).
     Diferente da versão com NOMA, aqui apenas o dispositivo com sinal mais forte é decodificado.
@@ -116,6 +147,9 @@ def SlottedAloha_MultipleChannels_NoNOMA(Devices, Relays, Channels_Relays, runs,
         SNR (numpy.ndarray): Matriz de SNR com shape (Devices, Relays, runs).
         N (float): Potência do ruído térmico (Watts).
         r (float): Taxa alvo mínima (bps/Hz) para decodificação com sucesso.
+        ClusterAssignment (numpy.ndarray, optional): Índice do relay atribuído a cada dispositivo
+            por rodada, shape (Devices, runs). Se None, comportamento original (sem clusterização).
+            Se fornecido, cada relay processa apenas os dispositivos a ele atribuídos.
 
     Returns:
         tuple: (ntput, ndist, ntotal) — throughput normalizado, tráfego distinto médio, tráfego total médio.
@@ -153,29 +187,51 @@ def SlottedAloha_MultipleChannels_NoNOMA(Devices, Relays, Channels_Relays, runs,
                         SNR_Device_Channel = SNR_Device[mask_channel, :]                   # SNR dos dispositivos neste canal
                         TransmittingDevices_channel = TransmittingDevices[mask_channel]     # IDs dos dispositivos neste canal
 
-                        # Ordena do mais forte ao mais fraco para identificar o dispositivo dominante
-                        sort_indexes = np.argsort(SNR_Device_Channel, axis=0)[::-1]                          # Índices de ordenação descendente
-                        SNR_Device_ord = np.take_along_axis(SNR_Device_Channel, sort_indexes, axis=0)        # SNR reordenado
-                        TransmittingDevices_ord = TransmittingDevices_channel[sort_indexes]                   # IDs reordenados
+                        if ClusterAssignment is None:
+                            # --- Sem clusterização: todos os relays processam todos os dispositivos ---
+                            sort_indexes = np.argsort(SNR_Device_Channel, axis=0)[::-1]
+                            SNR_Device_ord = np.take_along_axis(SNR_Device_Channel, sort_indexes, axis=0)
+                            TransmittingDevices_ord = TransmittingDevices_channel[sort_indexes]
 
-                        # --- Processa cada relay ---
-                        for rr in range(Relays):
-                            SIC_boolean = 0  # Flag de falha (mantida por compatibilidade com a estrutura NOMA)
+                            for rr in range(Relays):
+                                SIC_boolean = 0
 
-                            # Sem NOMA: tenta decodificar APENAS o usuário mais forte (range(1) = só índice 0)
-                            for jj in range(1):
-                                if SNR_Device_ord.shape[0] > jj:  # Garante que existe pelo menos 1 usuário
-                                    Interference = np.sum(SNR_Device_ord[jj+1:, rr])  # Interferência dos demais dispositivos
-                                    Signal = SNR_Device_ord[jj, rr]                    # Sinal do dispositivo mais forte
-                                    SINR = Signal / (Interference + N)                 # Calcula SINR
+                                for jj in range(1):
+                                    if SNR_Device_ord.shape[0] > jj:
+                                        Interference = np.sum(SNR_Device_ord[jj+1:, rr])
+                                        Signal = SNR_Device_ord[jj, rr]
+                                        SINR = Signal / (Interference + N)
 
-                                    # Verifica se a taxa alcançável supera o limiar
-                                    if (np.log2(1 + SINR) >= r) and (SIC_boolean == 0):
-                                        ThroughputFrame[s] += 1                            # Incrementa throughput
-                                        device_id = TransmittingDevices_ord[jj, rr]        # ID do dispositivo decodificado
-                                        SuccessTransmission[device_id, s] += 1             # Registra sucesso
-                                    else:
-                                        SIC_boolean = 1  # Marca falha na decodificação
+                                        if (np.log2(1 + SINR) >= r) and (SIC_boolean == 0):
+                                            ThroughputFrame[s] += 1
+                                            device_id = TransmittingDevices_ord[jj, rr]
+                                            SuccessTransmission[device_id, s] += 1
+                                        else:
+                                            SIC_boolean = 1
+                        else:
+                            # --- Com clusterização RSSI: cada relay processa apenas seus dispositivos atribuídos ---
+                            DeviceRelay_channel = ClusterAssignment[TransmittingDevices_channel, s]
+
+                            for rr in range(Relays):
+                                mask_relay = (DeviceRelay_channel == rr)
+                                if not np.any(mask_relay):
+                                    continue
+
+                                SNR_Relay = SNR_Device_Channel[mask_relay, :]
+                                Devices_relay = TransmittingDevices_channel[mask_relay]
+
+                                # Ordena por SNR no relay rr e seleciona apenas o mais forte (sem NOMA)
+                                sort_idx = np.argsort(SNR_Relay[:, rr])[::-1]
+                                SNR_Relay_ord = SNR_Relay[sort_idx, :]
+                                Devices_relay_ord = Devices_relay[sort_idx]
+
+                                Interference = np.sum(SNR_Relay_ord[1:, rr])  # Interferência dos demais dispositivos do cluster
+                                Signal = SNR_Relay_ord[0, rr]
+                                SINR = Signal / (Interference + N)
+
+                                if np.log2(1 + SINR) >= r:
+                                    ThroughputFrame[s] += 1
+                                    SuccessTransmission[Devices_relay_ord[0], s] += 1
 
         # --- Estatísticas ao final de cada frame ---
         active_success = np.sum(SuccessTransmission > 0, axis=0)      # Dispositivos únicos com sucesso por rodada

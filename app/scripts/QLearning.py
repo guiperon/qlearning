@@ -28,7 +28,7 @@ def InitializeQTable(Devices, Relays, Slots, Runs, Initialization):
 
     return c  # Retorna a Q-Table inicializada
 
-def Qlearning_MultipleChannels(Devices, Relays, Channels_Relays, runs, frames, Slots, SNR, N, r, QTable, alpha, gamma):
+def Qlearning_MultipleChannels(Devices, Relays, Channels_Relays, runs, frames, Slots, SNR, N, r, QTable, alpha, gamma, ClusterAssignment=None):
     """
     Simula o protocolo Q-Learning com múltiplos canais e NOMA (SIC).
     Cada dispositivo aprende iterativamente a melhor combinação (canal, slot)
@@ -47,6 +47,9 @@ def Qlearning_MultipleChannels(Devices, Relays, Channels_Relays, runs, frames, S
         QTable (numpy.ndarray): Tabela Q com shape (Relays, Slots, Runs, Devices).
         alpha (float): Taxa de aprendizado do Q-Learning (0 a 1).
         gamma (float): Fator de desconto temporal do Q-Learning (0 a 1).
+        ClusterAssignment (numpy.ndarray, optional): Índice do relay atribuído a cada dispositivo
+            por rodada, shape (Devices, runs). Se None, comportamento original (sem clusterização).
+            Se fornecido, cada relay processa apenas os dispositivos a ele atribuídos.
 
     Returns:
         tuple: (ntput, ndist, ntotal) — throughput normalizado, tráfego distinto médio, tráfego total médio.
@@ -114,35 +117,58 @@ def Qlearning_MultipleChannels(Devices, Relays, Channels_Relays, runs, frames, S
                         SNR_Device_Channel = SNR_Device[mask_channel, :]                   # SNR dos dispositivos neste canal
                         TransmittingDevices_channel = TransmittingDevices[mask_channel]     # IDs dos dispositivos neste canal
 
-                        # Ordena dispositivos do mais forte ao mais fraco para SIC-NOMA
-                        sort_indexes = np.argsort(SNR_Device_Channel, axis=0)[::-1]                          # Índices de ordenação descendente por relay
-                        SNR_Device_ord = np.take_along_axis(SNR_Device_Channel, sort_indexes, axis=0)        # SNR reordenado (mais forte primeiro)
+                        if ClusterAssignment is None:
+                            # --- Sem clusterização: todos os relays processam todos os dispositivos ---
+                            sort_indexes = np.argsort(SNR_Device_Channel, axis=0)[::-1]
+                            SNR_Device_ord = np.take_along_axis(SNR_Device_Channel, sort_indexes, axis=0)
+                            TransmittingDevices_ord = TransmittingDevices_channel[sort_indexes]
 
-                        # Mapeia IDs originais para a ordem SIC
-                        TransmittingDevices_ord = TransmittingDevices_channel[sort_indexes]
+                            for rr in range(Relays):
+                                SIC_boolean = 0
+                                num_users_channel = SNR_Device_Channel.shape[0]
 
-                        # --- Processa cada relay independentemente ---
-                        for rr in range(Relays):
-                            SIC_boolean = 0                                    # Flag de falha SIC: 0 = ativo, 1 = falhou
-                            num_users_channel = SNR_Device_Channel.shape[0]    # Número de usuários colidindo neste canal
+                                for jj in range(num_users_channel):
+                                    Interference = np.sum(SNR_Device_ord[jj+1:, rr])
+                                    Signal = SNR_Device_ord[jj, rr]
+                                    SINR = Signal / (Interference + N)
 
-                            # --- Loop SIC: tenta decodificar do mais forte ao mais fraco ---
-                            for jj in range(num_users_channel):
-                                Interference = np.sum(SNR_Device_ord[jj+1:, rr])  # Interferência dos sinais mais fracos restantes
-                                Signal = SNR_Device_ord[jj, rr]                    # Potência do sinal do usuário atual
-                                SINR = Signal / (Interference + N)                 # Calcula SINR (sinal / interferência + ruído)
+                                    if (np.log2(1 + SINR) >= r) and (SIC_boolean == 0):
+                                        ThroughputFrame[s] += 1
+                                        device_id = TransmittingDevices_ord[jj, rr]
+                                        Reward[device_id, s] = 1
+                                        SuccessTransmission[device_id, s] += 1
+                                    else:
+                                        SIC_boolean = 1
+                        else:
+                            # --- Com clusterização RSSI: cada relay processa apenas seus dispositivos atribuídos ---
+                            DeviceRelay_channel = ClusterAssignment[TransmittingDevices_channel, s]
 
-                                # Verifica se taxa alcançável supera o limiar e SIC ainda está ativo
-                                if (np.log2(1 + SINR) >= r) and (SIC_boolean == 0):
-                                    ThroughputFrame[s] += 1                        # Incrementa throughput do frame
+                            for rr in range(Relays):
+                                mask_relay = (DeviceRelay_channel == rr)
+                                if not np.any(mask_relay):
+                                    continue
 
-                                    device_id = TransmittingDevices_ord[jj, rr]    # ID original do dispositivo decodificado
+                                SNR_Relay = SNR_Device_Channel[mask_relay, :]
+                                Devices_relay = TransmittingDevices_channel[mask_relay]
 
-                                    # Sucesso: define recompensa positiva e registra transmissão
-                                    Reward[device_id, s] = 1                       # Recompensa +1 para atualização da Q-Table
-                                    SuccessTransmission[device_id, s] += 1         # Contabiliza sucesso do dispositivo
-                                else:
-                                    SIC_boolean = 1                                # Marca falha no SIC — para decodificação subsequente
+                                # Ordena por SNR no relay rr (mais forte primeiro)
+                                sort_idx = np.argsort(SNR_Relay[:, rr])[::-1]
+                                SNR_Relay_ord = SNR_Relay[sort_idx, :]
+                                Devices_relay_ord = Devices_relay[sort_idx]
+
+                                # --- Loop SIC: decodifica do mais forte ao mais fraco ---
+                                SIC_boolean = 0
+                                for jj in range(len(Devices_relay_ord)):
+                                    Interference = np.sum(SNR_Relay_ord[jj+1:, rr])
+                                    Signal = SNR_Relay_ord[jj, rr]
+                                    SINR = Signal / (Interference + N)
+
+                                    if (np.log2(1 + SINR) >= r) and (SIC_boolean == 0):
+                                        ThroughputFrame[s] += 1
+                                        Reward[Devices_relay_ord[jj], s] = 1
+                                        SuccessTransmission[Devices_relay_ord[jj], s] += 1
+                                    else:
+                                        SIC_boolean = 1  # Marca falha no SIC — para de decodificar os subsequentes
 
         # ==================================================================
         # 3. Atualização da Q-Table (Equação de Bellman modificada)
@@ -182,7 +208,7 @@ def Qlearning_MultipleChannels(Devices, Relays, Channels_Relays, runs, frames, S
 
     return ntput, ndist, ntotal  # Retorna throughput normalizado, tráfego distinto e total
 
-def Qlearning_MultipleChannels_NoNOMA(Devices, Relays, Channels_Relays, runs, frames, Slots, SNR, N, r, QTable, alpha, gamma):
+def Qlearning_MultipleChannels_NoNOMA(Devices, Relays, Channels_Relays, runs, frames, Slots, SNR, N, r, QTable, alpha, gamma, ClusterAssignment=None):
     """
     Simula o protocolo Q-Learning com múltiplos canais SEM NOMA (apenas Efeito Captura).
     Diferente da versão NOMA, aqui apenas o dispositivo com sinal mais forte pode ser decodificado.
@@ -200,6 +226,9 @@ def Qlearning_MultipleChannels_NoNOMA(Devices, Relays, Channels_Relays, runs, fr
         QTable (numpy.ndarray): Tabela Q com shape (Relays, Slots, Runs, Devices).
         alpha (float): Taxa de aprendizado do Q-Learning (0 a 1).
         gamma (float): Fator de desconto temporal do Q-Learning (0 a 1).
+        ClusterAssignment (numpy.ndarray, optional): Índice do relay atribuído a cada dispositivo
+            por rodada, shape (Devices, runs). Se None, comportamento original (sem clusterização).
+            Se fornecido, cada relay processa apenas os dispositivos a ele atribuídos.
 
     Returns:
         tuple: (ntput, ndist, ntotal) — throughput normalizado, tráfego distinto médio, tráfego total médio.
@@ -264,33 +293,54 @@ def Qlearning_MultipleChannels_NoNOMA(Devices, Relays, Channels_Relays, runs, fr
                         SNR_Device_Channel = SNR_Device[mask_channel, :]                   # SNR neste canal
                         TransmittingDevices_channel = TransmittingDevices[mask_channel]     # IDs neste canal
 
-                        # Ordena do mais forte ao mais fraco para identificar o dominante
-                        sort_indexes = np.argsort(SNR_Device_Channel, axis=0)[::-1]                          # Ordenação descendente
-                        SNR_Device_ord = np.take_along_axis(SNR_Device_Channel, sort_indexes, axis=0)        # SNR reordenado
-                        TransmittingDevices_ord = TransmittingDevices_channel[sort_indexes]                   # IDs reordenados
+                        if ClusterAssignment is None:
+                            # --- Sem clusterização: todos os relays processam todos os dispositivos ---
+                            sort_indexes = np.argsort(SNR_Device_Channel, axis=0)[::-1]
+                            SNR_Device_ord = np.take_along_axis(SNR_Device_Channel, sort_indexes, axis=0)
+                            TransmittingDevices_ord = TransmittingDevices_channel[sort_indexes]
 
-                        # --- Processa cada relay ---
-                        for rr in range(Relays):
-                            SIC_boolean = 0                                    # Flag de falha (por compatibilidade estrutural)
-                            num_users_channel = SNR_Device_Channel.shape[0]    # Número de usuários neste canal
+                            for rr in range(Relays):
+                                SIC_boolean = 0
+                                num_users_channel = SNR_Device_Channel.shape[0]
 
-                            # Sem NOMA: tenta decodificar APENAS o mais forte (range(1) = índice 0)
-                            for jj in range(1):
-                                if num_users_channel > 0:                      # Garante que há pelo menos 1 usuário
-                                    Interference = np.sum(SNR_Device_ord[jj+1:, rr])  # Interferência dos demais
-                                    Signal = SNR_Device_ord[jj, rr]                    # Sinal do mais forte
-                                    SINR = Signal / (Interference + N)                 # Calcula SINR
+                                for jj in range(1):
+                                    if num_users_channel > 0:
+                                        Interference = np.sum(SNR_Device_ord[jj+1:, rr])
+                                        Signal = SNR_Device_ord[jj, rr]
+                                        SINR = Signal / (Interference + N)
 
-                                    # Verifica se taxa alcançável supera o limiar
-                                    if (np.log2(1 + SINR) >= r) and (SIC_boolean == 0):
-                                        ThroughputFrame[s] += 1                        # Incrementa throughput
+                                        if (np.log2(1 + SINR) >= r) and (SIC_boolean == 0):
+                                            ThroughputFrame[s] += 1
+                                            device_id = TransmittingDevices_ord[jj, rr]
+                                            Reward[device_id, s] = 1
+                                            SuccessTransmission[device_id, s] += 1
+                                        else:
+                                            SIC_boolean = 1
+                        else:
+                            # --- Com clusterização RSSI: cada relay processa apenas seus dispositivos atribuídos ---
+                            DeviceRelay_channel = ClusterAssignment[TransmittingDevices_channel, s]
 
-                                        device_id = TransmittingDevices_ord[jj, rr]    # ID do dispositivo decodificado
+                            for rr in range(Relays):
+                                mask_relay = (DeviceRelay_channel == rr)
+                                if not np.any(mask_relay):
+                                    continue
 
-                                        Reward[device_id, s] = 1                       # Recompensa +1 por sucesso
-                                        SuccessTransmission[device_id, s] += 1         # Registra sucesso
-                                    else:
-                                        SIC_boolean = 1                                # Marca falha na decodificação
+                                SNR_Relay = SNR_Device_Channel[mask_relay, :]
+                                Devices_relay = TransmittingDevices_channel[mask_relay]
+
+                                # Ordena por SNR no relay rr e seleciona apenas o mais forte (sem NOMA)
+                                sort_idx = np.argsort(SNR_Relay[:, rr])[::-1]
+                                SNR_Relay_ord = SNR_Relay[sort_idx, :]
+                                Devices_relay_ord = Devices_relay[sort_idx]
+
+                                Interference = np.sum(SNR_Relay_ord[1:, rr])
+                                Signal = SNR_Relay_ord[0, rr]
+                                SINR = Signal / (Interference + N)
+
+                                if np.log2(1 + SINR) >= r:
+                                    ThroughputFrame[s] += 1
+                                    Reward[Devices_relay_ord[0], s] = 1
+                                    SuccessTransmission[Devices_relay_ord[0], s] += 1
 
         # ==================================================================
         # 3. Atualização da Q-Table (Equação de Bellman modificada)
