@@ -14,7 +14,8 @@ from QLearning import InitializeQTable, Qlearning_MultipleChannels, Qlearning_Mu
 # ==============================================================================
 
 def plot_topology_clusters(x_dev, y_dev, x_rel, y_rel, ClusterAssignment,
-                           cell_radius, n_dev, n_relays, runs, output_dir):
+                           cell_radius, n_dev, n_relays, runs, output_dir,
+                           filename='Topology_Clusters.png'):
     """
     Gera e salva figura com a topologia de cada rodada Monte Carlo,
     colorindo os dispositivos pelo cluster (relay) ao qual foram associados via RSSI.
@@ -29,6 +30,7 @@ def plot_topology_clusters(x_dev, y_dev, x_rel, y_rel, ClusterAssignment,
         n_relays (int): Número de relays.
         runs (int): Número de rodadas Monte Carlo (um subplot por rodada).
         output_dir (str): Diretório onde o arquivo PNG será salvo.
+        filename (str): Nome do arquivo PNG de saída (padrão: 'Topology_Clusters.png').
     """
     # Paleta de cores e marcadores (um por relay)
     cluster_colors = ['tab:blue', 'tab:orange', 'tab:green', 'tab:red',
@@ -112,7 +114,7 @@ def plot_topology_clusters(x_dev, y_dev, x_rel, y_rel, ClusterAssignment,
     )
     plt.tight_layout(rect=[0, 0.07, 1, 1])   # Reserva espaço inferior para a legenda
 
-    out = os.path.join(output_dir, 'Topology_Clusters.png')
+    out = os.path.join(output_dir, filename)
     plt.savefig(out, bbox_inches='tight', dpi=150)
     plt.close(fig)
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Saved topology plot to: {out}")
@@ -200,6 +202,9 @@ def run_simulation():
     e gera gráficos de throughput e redundância vs número de dispositivos.
     """
     print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Iniciando Simulação...")
+    
+    # Define como None para não gerar figuras de topologia (pode ser 'png' para salvar)
+    plot_topology = None;
 
     # Configurações dos parâmetros
     np.random.seed(0)                                # Fixa semente aleatória para reprodutibilidade
@@ -229,7 +234,7 @@ def run_simulation():
     cell_radius = 5e3                                # Raio da célula (5 km)
 
     # --- Parâmetros de Simulação ---
-    runs = 10                                       # Rodadas Monte Carlo
+    runs = 100                                       # Rodadas Monte Carlo
     slots = 100                                      # Slots de tempo por quadro
     frames = 50                                      # Quadros de transmissão
 
@@ -257,20 +262,25 @@ def run_simulation():
     h_imag = np.sqrt(np.random.gamma(shape_k, scale_theta, size_h))    # Parte imaginária do canal
     h_Nakagami = np.abs((h_real + 1j * h_imag) / np.sqrt(m))           # Módulo normalizado
 
-    # --- Figura de Topologia: mostra os clusters RSSI para o menor cenário de dispositivos ---
-    n_dev_plot = int(Devices[0])                                         # Usa o menor número de dispositivos
-    dist_plot   = Distance[:n_dev_plot, :, :]                            # Fatia de distâncias para n_dev_plot
-    h_plot      = h_Nakagami[:n_dev_plot, :, :]                         # Fatia de canal para n_dev_plot
-    alpha_plot  = 10**(-(128.1 + 36.7 * np.log10(dist_plot)) / 10)     # Atenuação de percurso
-    SNR_plot    = P / N * alpha_plot * h_plot**2                        # SNR por dispositivo-relay-rodada
-    ClusterAssignment_plot = np.argmax(SNR_plot, axis=1)                # shape (n_dev_plot, runs)
-
+    # --- Figuras de Topologia: uma por quantidade de dispositivos ---
     script_dir_pre = os.path.dirname(os.path.abspath(__file__))
     results_dir = os.path.join(script_dir_pre, '..', 'results')
-    plot_topology_clusters(
-        x_dev, y_dev, x_rel, y_rel, ClusterAssignment_plot,
-        cell_radius, n_dev_plot, Relays, runs, results_dir
-    )
+
+    for n_dev_plot in Devices:
+        n_dev_plot = int(n_dev_plot)
+        dist_plot  = Distance[:n_dev_plot, :, :]                        # Fatia de distâncias
+        h_plot     = h_Nakagami[:n_dev_plot, :, :]                      # Fatia de canal
+        alpha_plot = 10**(-(128.1 + 36.7 * np.log10(dist_plot)) / 10)  # Atenuação de percurso
+        SNR_plot   = P / N * alpha_plot * h_plot**2                     # SNR por dispositivo-relay-rodada
+        ClusterAssignment_plot = np.argmax(SNR_plot, axis=1)            # shape (n_dev_plot, runs)
+
+        if (plot_topology is not None):
+            topo_filename = f'Topology_Clusters_D{n_dev_plot}.png'
+            plot_topology_clusters(
+                x_dev, y_dev, x_rel, y_rel, ClusterAssignment_plot,
+                cell_radius, n_dev_plot, Relays, runs, results_dir,
+                filename=topo_filename
+        )
 
     # --- Pré-alocação das estruturas de resultados ---
     # Dicionário aninhado: res_data[método][num_canais] = {ntput, ndist, ntotal}
